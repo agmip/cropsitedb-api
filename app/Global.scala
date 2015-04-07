@@ -1,10 +1,11 @@
 import play.api.GlobalSettings
 import play.api.libs.concurrent.Akka
 import akka.actor.{ Actor, Props }
-import play.api.libs.concurrent.Execution.Implicits.defaultContext
 import play.api.Play.current
 import play.api.mvc._
-import cropsitedb.actors.{ProcessACEB, ProcessDOME, ProcessACMO, ProcessALINK}
+import cropsitedb.actors._
+import play.api.libs.concurrent.Execution.Implicits._
+import scala.concurrent.duration._
 
 class CorsFilter extends EssentialFilter {
   def apply(next: EssentialAction) = new EssentialAction {
@@ -31,5 +32,8 @@ object Global extends WithFilters(new CorsFilter) with GlobalSettings {
     val domeProc = Akka.system.actorOf(Props[ProcessDOME], name="process-dome")
     val acmoProc = Akka.system.actorOf(Props[ProcessACMO], name="process-acmo")
     val alnkProc = Akka.system.actorOf(Props[ProcessALINK], name="process-alnk")
+    val syncProc = Akka.system.actorOf(Props[SyncActor], name="sync-actor")
+
+    Akka.system.scheduler.schedule(0.microsecond, 5.second, syncProc, "tick")
   }
 }
