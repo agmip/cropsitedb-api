@@ -32,7 +32,7 @@ object ClusterController extends Controller {
       errors => Future(BadRequest(Json.obj("error"->"Invalid json message"))),
       jReq   => {
           val p = Promise[String]
-          nodeActor ! p
+          nodeActor ! ClusterJoin(jReq, p)
           p.future.map { x =>
             Ok(x)
           }
