@@ -32,8 +32,6 @@ object Global extends WithFilters(new CorsFilter) with GlobalSettings {
     val domeProc = Akka.system.actorOf(Props[ProcessDOME], name="process-dome")
     val acmoProc = Akka.system.actorOf(Props[ProcessACMO], name="process-acmo")
     val alnkProc = Akka.system.actorOf(Props[ProcessALINK], name="process-alnk")
-    val syncProc = Akka.system.actorOf(Props[SyncActor], name="sync-actor")
-
-    Akka.system.scheduler.schedule(0.microsecond, 5.second, syncProc, "tick")
+    val nodeProc = Akka.system.actorOf(Props[NodeActor], name="node-handler")
   }
 }
