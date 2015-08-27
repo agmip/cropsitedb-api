@@ -5,11 +5,12 @@ import akka.actor.ActorSelection
 import java.io.IOException
 import java.io.File
 
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.FileSystems
 import java.nio.file.FileVisitor
 import java.nio.file.FileVisitResult
-import java.nio.file.Path
+import java.nio.file.{Path, Paths}
 import java.nio.file.attribute.BasicFileAttributes
 
 import play.api._
@@ -18,7 +19,7 @@ import play.api.mvc._
 import play.api.db.DB
 import anorm._
 import cropsitedb.actors.{Messages, ProcessDOME}
-import cropsitedb.helpers.{AnormHelper, CropsiteDBConfig, AgmipFileIdentifier}
+import cropsitedb.helpers.{AnormHelper, CropsiteDBConfig}
 
 import play.api.libs.concurrent.Akka
 import play.api.libs.json._
@@ -32,9 +33,13 @@ import play.api.libs.concurrent.Execution.Implicits.defaultContext
 import play.api.Logger
 
 import com.google.common.io.{Files => GFiles}
+import org.agmip.tools.{Seamer, AgmipFileIdentifier}
 
 
 object DatasetController extends Controller {
+  val baseDir = CropsiteDBConfig.localFileStore
+  def tmpDir = Paths.get(baseDir, "tmp")
+
   def index = Action {
     Ok(Json.obj())
   }
@@ -52,7 +57,9 @@ object DatasetController extends Controller {
       dscReq => {
         val dsid = java.util.UUID.randomUUID().toString
         val destDir = dsPath(dsid, dscReq.freeze)
+        val dsTmpDir = tmpDir.resolve(dsid)
         Files.createDirectories(destDir)
+        Files.createDirectories(dsTmpDir)
         DB.withTransaction { implicit c =>
           SQL("INSERT INTO ace_datasets(dsid, title, email, frozen) VALUES ({d}, {t}, {e}, {f})").on("d"->dsid, "t"->dscReq.title, "e"->dscReq.email.toLowerCase, "f"->dscReq.freeze.getOrElse(false)).execute()
         }
@@ -70,9 +77,13 @@ object DatasetController extends Controller {
       DB.withTransaction { implicit c =>
         SQL("SELECT * FROM ace_datasets WHERE dsid={d}").on("d"->dsid).apply()
           .map { r =>
-          val p = dsPath(r[String]("dsid"), Option(r[Boolean]("frozen")))
+          val p = tmpDir.resolve(r[String]("dsid"))//dsPath(r[String]("dsid"), Option(r[Boolean]("frozen")))
           val dest = p.resolve(fileName)
-          Files.move(f.ref.file.toPath, dest)
+          try {
+            Files.move(f.ref.file.toPath, dest)
+          } catch {
+           case faeEx: FileAlreadyExistsException => BadRequest(Json.obj("error"->"File already exists, please rename."))
+          }
         }
         Ok(Json.obj("filetype"->contentType))
       }
@@ -92,7 +103,7 @@ object DatasetController extends Controller {
           SQL("SELECT * FROM ace_datasets WHERE dsid={d} AND email={e}")
             .on("d"->dsid, "e"->req.email.toLowerCase)
             .apply().map { r =>
-            val p = dsPath(r[String]("dsid"), Option(r[Boolean]("frozen")))
+              val p = tmpDir.resolve(r[String]("dsid"))//dsPath(r[String]("dsid"), Option(r[Boolean]("frozen")))
             val f = p.resolve(req.file)
             Files.deleteIfExists(f)
           }
@@ -140,27 +151,14 @@ object DatasetController extends Controller {
             .on("d"->dsid, "e"->req.email.toLowerCase)
             .apply().map { r =>
             val frozen = Option(r[Boolean]("frozen"))
-            val p = dsPath(r[String]("dsid"), frozen)
-            var i:Int = 1
-
-            Files.walkFileTree(p, new FileVisitor[Path] {
-              def visitFileFailed(file: Path, ex: IOException) = FileVisitResult.CONTINUE
-              def preVisitDirectory(dir: Path, attrs: BasicFileAttributes) = FileVisitResult.CONTINUE
-              def postVisitDirectory(dir: Path, ex: IOException) = FileVisitResult.CONTINUE
-              def visitFile(file: Path, attrs: BasicFileAttributes) = {
-                val fileExt = GFiles.getFileExtension(file.toString)
-                val newName = f"$i%04d"
-                Files.move(file, file.getParent().resolve(newName+"."+fileExt))
-                i = i + 1
-                FileVisitResult.CONTINUE
-              }
-            })
+            val p = tmpDir.resolve(r[String]("dsid"))
+            val dst = dsPath(r[String]("dsid"), frozen)
 
             frozen match {
               case None => {}
               case Some(true) => {}
               case Some(false) => {
-                Files.walkFileTree(p, new FileVisitor[Path] {
+                Files.walkFileTree(dst, new FileVisitor[Path] {
                   def visitFileFailed(file: Path, ex: IOException) = FileVisitResult.CONTINUE
                   def visitFile(file: Path, attrs: BasicFileAttributes) = {
                     Logger.debug("File name: "+file.toAbsolutePath)
@@ -188,7 +186,6 @@ object DatasetController extends Controller {
                       case Some(exec) => exec ! Messages.ProcessFile(dsid, file.toAbsolutePath.toString)
                       case None => {}
                     }
-                    
                     FileVisitResult.CONTINUE
                   }
                   def preVisitDirectory(dir: Path, attrs: BasicFileAttributes) = FileVisitResult.CONTINUE
@@ -202,7 +199,6 @@ object DatasetController extends Controller {
       }
     )
   }
-
 
   def dsPath(dsid: String, frozen: Option[Boolean]): Path  = {
     val base = CropsiteDBConfig.localFileStore
