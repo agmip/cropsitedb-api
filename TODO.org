@@ -1,0 +1,3 @@
+* AgTrials
+  - [ ] Verify that the obs_data is coming out for them
+  - [ ] Fix metadata output for OBS_DATA (need to strip " from all variables)
