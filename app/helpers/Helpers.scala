@@ -93,20 +93,16 @@ object DatasetHelper {
 // TODO: Needs support for Galaxy extensions (GALAXY_URL and TOOL_ID)
 object DownloadHelper {
   case class DownloadRequest(email: Option[String], galaxyUrl: Option[String], toolId: Option[String], fileTypes: Int, downloads: Seq[DSIDRequest])
-  case class DSIDRequest(dsid: String, eids: Seq[String])
+  case class DSIDRequest(dsid: String, eids: Option[Seq[String]])
 
   implicit val DSIDRequestReads = Json.reads[DSIDRequest]
-  /* implicit val DSIDRequestReads: Reads[DSIDRequest] = (
-   (JsPath \ "dsid").read[String] and
-   (JsPath \ "eids").lazyRead(Reads.seq[String])
-   )(DSIDRequest.apply _) */
 
   implicit val DownloadRequestReads: Reads[DownloadRequest] = (
     (JsPath \ "email").readNullable[String] and
       (JsPath \ "galaxy_url").readNullable[String] and
       (JsPath \ "tool_id").readNullable[String] and
       (JsPath \ "type").read[Int] and
-      (JsPath \ "downloads").read[Seq[DSIDRequest]]//lazyRead(Reads.seq[DSIDRequest])
+      (JsPath \ "downloads").read[Seq[DSIDRequest]]
   )(DownloadRequest.apply _)
 }
 

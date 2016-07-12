@@ -55,7 +55,10 @@ object DownloadController extends Controller {
         Files.createDirectories(dlPath)
         withZipFilesystem(dlPath) { dl =>
           dlReq.downloads.foreach { dataset =>
-            val eids : Map[String, Seq[String]] = Map("eid" -> dataset.eids)
+            val eids = dataset.eids match {
+              case None => None
+              case Some(ids) => Some(Map("eid" -> ids))
+            }
             val destPath = dl.getPath(fetchCleanDSName(dataset.dsid))
             if (fileTypes.contains("ACEB")) {
               Logger.debug("RUNNING ACE DOWNLOAD PROCESSING")
@@ -74,7 +77,11 @@ object DownloadController extends Controller {
               val acmoWriter = new FileWriter(tmpFile.toFile)
               acmoWriter.write(AcmoUtil.generateAcmoHeader)
               DB.withTransaction { implicit c =>
-                val acmos = SQL("SELECT * FROM acmo_metadata WHERE dataset_id={dsid} AND "+AnormHelper.dynUnionBuilder(eids)).on((eids+("dsid" -> Seq(dataset.dsid))).map(AnormHelper.dynQueryToNamedParam(_)).toSeq:_*).apply()
+                val acmos = eids match {
+                  case None => SQL("SELECT * FROM acmo_metadata WHERE dataset_id={dsid}").on('dsid -> dataset.dsid)
+                  case Some(ids) => SQL("SELECT * FROM acmo_metadata WHERE dataset_id={dsid} AND "+AnormHelper.dynUnionBuilder(ids)).on((ids+("dsid" -> Seq(dataset.dsid))).map(AnormHelper.dynQueryToNamedParam(_)).toSeq:_*)
+                }
+                acmos.apply()
               }
               acmoWriter.close
               Files.move(tmpFile, acmoPath)
@@ -84,70 +91,34 @@ object DownloadController extends Controller {
                 // Check for ALINK information
               }
             }
-            // Output the Metadata (Human-Readable) File Here
-            val mdf = MetadataFilter.INSTANCE
-            val mdPath    = destPath.resolve("metadata.csv")
-            val mdTmpFile = Files.createTempFile(tmpDir, "metadata", ".csv")
-            val mdWriter = new FileWriter(mdTmpFile.toFile)
-            val descLine: ListBuffer[String] = new ListBuffer()
-            val headLine: ListBuffer[String] = new ListBuffer()
-            mdf.getExportMetadata().foreach { col =>
-              descLine += (mdf.getDescriptions().apply(col))
-              headLine += (col)
+            makeMetadataFile(destPath, dataset.dsid, eids)
             }
-            mdWriter.write("\""+(descLine.mkString("\",\""))+"\"\n")
-            mdWriter.write("\""+(headLine.mkString("\",\""))+"\"\n")
-            DB.withTransaction { implicit c =>
-              SQL("SELECT * FROM ace_metadata WHERE dsid={dsid} AND "+AnormHelper.dynUnionBuilder(eids)).on((eids+("dsid" -> Seq(dataset.dsid))).map(AnormHelper.dynQueryToNamedParam(_)).toSeq:_*).apply().foreach { 
-                line => {
-                  val dataLine: ListBuffer[String] = new ListBuffer()
-                  // Now do something with each row of data.
-                  mdf.getExportMetadata().foreach { col =>
-                    col.toUpperCase match {
-                      case "PDATE"|"HDATE" => {
-                        val d: String = line[Option[Date]](col) match {
-                          case Some(dt) => AnormHelper.df2.format(dt)
-                          case None => ""
-                        }
-                        dataLine += (d)
-                      }
-                      case _ => dataLine += (line[Option[String]](col)).getOrElse("")
-                    }
-                  }
-                  mdWriter.write("\""+(dataLine.mkString("\",\""))+"\"\n")
-                }
-              }
+          }
+          val destUrl = routes.DownloadController.serve(dlReqId).absoluteURL(true)
+          Future { Ok(Json.obj("url" -> destUrl)) }
+        })
+    }
+
+    def serveDataset(dsid: String) = Action { implicit request =>
+      // Check to see if the zip file exists in the downloads/datasets directory
+      val destFile  = Paths.get(baseDir, "downloads", "datasets", dsid+".zip")
+      val sourceDir = Paths.get(baseDir, "uploads", dsid)
+      Files.exists(sourceDir) match {
+        case false => BadRequest(Json.obj("error" -> "Invalid dataset id"))
+        case true  => {
+          Files.exists(destFile) match {
+            case true => {
+              Ok.sendFile(
+                content = destFile.toAbsolutePath.toFile,
+                fileName = _ => "agmip_download.zip"
+              )
             }
-            mdWriter.close
-            Files.move(mdTmpFile, mdPath)
-          }
-        }
-
-        val destUrl = routes.DownloadController.serve(dlReqId).absoluteURL(true)
-        Future { Ok(Json.obj("url" -> destUrl)) }
-      })
-  }
-
-  def serveDataset(dsid: String) = Action { implicit request =>
-    // Check to see if the zip file exists in the downloads/datasets directory
-    val destFile  = Paths.get(baseDir, "downloads", "datasets", dsid+".zip")
-    val sourceDir = Paths.get(baseDir, "uploads", dsid)
-    Files.exists(sourceDir) match {
-      case false => BadRequest(Json.obj("error" -> "Invalid dataset id"))
-      case true  => {
-        Files.exists(destFile) match {
-          case true => {
-            Ok.sendFile(
-              content = destFile.toAbsolutePath.toFile,
-              fileName = _ => "agmip_download.zip"
-            )
-          }
-          case false => {
-            Logger.debug("Creating dataset root: "+destFile.getParent)
-            Files.createDirectories(destFile.getParent)
-            withZipFilesystem(destFile) { ds =>
-              val destPath = ds.getPath(fetchCleanDSName(dsid))
-              Files.walkFileTree(sourceDir, new FileVisitor[Path] {
+            case false => {
+              Logger.debug("Creating dataset root: "+destFile.getParent)
+              Files.createDirectories(destFile.getParent)
+              withZipFilesystem(destFile) { ds =>
+                val destPath = ds.getPath(fetchCleanDSName(dsid))
+                Files.walkFileTree(sourceDir, new FileVisitor[Path] {
                   def visitFileFailed(file: Path, ex: IOException) = FileVisitResult.CONTINUE
                   def visitFile(file: Path, attrs: BasicFileAttributes) = {
                     val destDir = destPath.resolve(sourceDir.relativize(file.getParent).toString)
@@ -156,127 +127,171 @@ object DownloadController extends Controller {
                     FileVisitResult.CONTINUE
                   }
                   def preVisitDirectory(dir: Path, attrs: BasicFileAttributes) = {
-                      val relPath =  sourceDir.relativize(dir)
-                      Logger.debug("Creation relative path: "+relPath.toString)
-                      Files.createDirectories(destPath.resolve(relPath.toString))
+                    val relPath =  sourceDir.relativize(dir)
+                    Logger.debug("Creation relative path: "+relPath.toString)
+                    Files.createDirectories(destPath.resolve(relPath.toString))
                     FileVisitResult.CONTINUE
                   }
                   def postVisitDirectory(dir: Path, ex: IOException) = FileVisitResult.CONTINUE
-              })
+                })
+                makeMetadataFile(destPath, dsid, None)
+              }
+              Ok.sendFile(
+                content = destFile.toAbsolutePath.toFile,
+                fileName = _ => "agmip_download.zip"
+              )
             }
-            Ok.sendFile(
-              content = destFile.toAbsolutePath.toFile,
-              fileName = _ => "agmip_download.zip"
-            )
           }
         }
       }
     }
-  }
 
-  def serve(dlid: String) = Action { implicit request =>
-    // By default, we should be downloading the .ZIP files
-    val download = Paths.get(baseDir, "downloads", dlid+".zip")
-    if (Files.isReadable(download.toAbsolutePath)) {
-      Ok.sendFile(
-        content = download.toAbsolutePath.toFile,
-        fileName = _ => "agmip_download.zip"
-      )
-    } else {
-      BadRequest("Missing file")
+    def serve(dlid: String) = Action { implicit request =>
+      // By default, we should be downloading the .ZIP files
+      val download = Paths.get(baseDir, "downloads", dlid+".zip")
+      if (Files.isReadable(download.toAbsolutePath)) {
+        Ok.sendFile(
+          content = download.toAbsolutePath.toFile,
+          fileName = _ => "agmip_download.zip"
+        )
+      } else {
+        BadRequest("Missing file")
+      }
     }
-  }
 
-  def fileTypeBuilder(ft: Int): List[String] = {
-    fileTypeBuilderL(ft, 1, List())
-  }
-
-  def fileTypeBuilderL(ft: Int, test: Int, l: List[String]): List[String] = {
-    test match {
-      case 1 =>
-        if ((ft & test) != 0) fileTypeBuilderL(ft, 2, l :+ "ACEB") else fileTypeBuilderL(ft, 2, l)
-      case 2 =>
-        if ((ft & test) != 0) fileTypeBuilderL(ft, 4, l :+ "DOME") else fileTypeBuilderL(ft, 4, l)
-      case 4 =>
-        if ((ft & test) != 0) l :+ "ACMO" else l
-      case _ =>
-        l
+    def fileTypeBuilder(ft: Int): List[String] = {
+      fileTypeBuilderL(ft, 1, List())
     }
-  }
 
-  private def buildACEB(source: Path, dest: Path, tmp: Path, data: DownloadHelper.DSIDRequest):Option[String] = {
-    Logger.debug("Received source: "+source+" dest: "+dest+" tmp: "+tmp)
-    Logger.debug("Received data: "+data)
-    Files.isReadable(source) match {
-      case false => Some("Missing the source file: "+source)
-      case true  => {
-        Files.exists(dest) match {
-          case true  => Some("Download file conflict. Please try again")
-          case false => {
-            Files.createDirectories(dest.getParent)
-            Files.createDirectories(tmp)
-            var sids:Set[String] = Set()
-            var wids:Set[String] = Set()
-            val destDS = new AceDataset()
-            val sourceDS = AceParser.parseACEB(source.toAbsolutePath.toFile)
-            sourceDS.getExperiments.toList.foreach { ex =>
-              val eid = ex.getId(false)
-              if (data.eids.contains(eid)) {
-                destDS.addExperiment(ex.rebuildComponent())
-                sids = sids + ex.getValueOr("sid", "INVALID")
-                wids = wids + ex.getValueOr("wid", "INVALID")
+    def fileTypeBuilderL(ft: Int, test: Int, l: List[String]): List[String] = {
+      test match {
+        case 1 =>
+          if ((ft & test) != 0) fileTypeBuilderL(ft, 2, l :+ "ACEB") else fileTypeBuilderL(ft, 2, l)
+        case 2 =>
+          if ((ft & test) != 0) fileTypeBuilderL(ft, 4, l :+ "DOME") else fileTypeBuilderL(ft, 4, l)
+        case 4 =>
+          if ((ft & test) != 0) l :+ "ACMO" else l
+        case _ =>
+          l
+      }
+    }
+
+    private def buildACEB(source: Path, dest: Path, tmp: Path, data: DownloadHelper.DSIDRequest):Option[String] = {
+      Logger.debug("Received source: "+source+" dest: "+dest+" tmp: "+tmp)
+      Logger.debug("Received data: "+data)
+      Files.isReadable(source) match {
+        case false => Some("Missing the source file: "+source)
+        case true  => {
+          Files.exists(dest) match {
+            case true  => Some("Download file conflict. Please try again")
+            case false => {
+              Files.createDirectories(dest.getParent)
+              Files.createDirectories(tmp)
+              var sids:Set[String] = Set()
+              var wids:Set[String] = Set()
+              val destDS = new AceDataset()
+              val sourceDS = AceParser.parseACEB(source.toAbsolutePath.toFile)
+              sourceDS.getExperiments.toList.foreach { ex =>
+                val eid = ex.getId(false)
+                if (data.eids.contains(eid)) {
+                  destDS.addExperiment(ex.rebuildComponent())
+                  sids = sids + ex.getValueOr("sid", "INVALID")
+                  wids = wids + ex.getValueOr("wid", "INVALID")
+                }
               }
-            }
-            sourceDS.getSoils.toList.foreach { s =>
-              if (sids.contains(s.getId)) {
-                destDS.addSoil(s.rebuildComponent)
+              sourceDS.getSoils.toList.foreach { s =>
+                if (sids.contains(s.getId)) {
+                  destDS.addSoil(s.rebuildComponent)
+                }
               }
-            }
-            sourceDS.getWeathers.toList.foreach { w =>
-              if (wids.contains(w.getId(false))) {
-                destDS.addWeather(w.rebuildComponent)
+              sourceDS.getWeathers.toList.foreach { w =>
+                if (wids.contains(w.getId(false))) {
+                  destDS.addWeather(w.rebuildComponent)
+                }
               }
-            }
-            destDS.linkDataset
-            DB.withTransaction { implicit c =>
-              destDS.getExperiments.toList.foreach { ex =>
-                SQL("UPDATE ace_metadata SET download_count = download_count + 1 WHERE dsid={dsid} AND eid={eid}")
-                  .on("dsid"->data.dsid, "eid"->ex.getId(true))
-                  .executeUpdate()
+              destDS.linkDataset
+              DB.withTransaction { implicit c =>
+                destDS.getExperiments.toList.foreach { ex =>
+                  SQL("UPDATE ace_metadata SET download_count = download_count + 1 WHERE dsid={dsid} AND eid={eid}")
+                    .on("dsid"->data.dsid, "eid"->ex.getId(true))
+                    .executeUpdate()
+                }
               }
+              val tmpFile = Files.createTempFile(tmp, data.dsid, ".tmp").toAbsolutePath
+              Logger.debug("ACE TMP File: "+tmpFile)
+              AceGenerator.generateACEB(tmpFile.toFile, destDS)
+              Logger.debug("ACE Dest: "+dest)
+              Files.move(tmpFile, dest)
+              None
             }
-            val tmpFile = Files.createTempFile(tmp, data.dsid, ".tmp").toAbsolutePath
-            Logger.debug("ACE TMP File: "+tmpFile)
-            AceGenerator.generateACEB(tmpFile.toFile, destDS)
-            Logger.debug("ACE Dest: "+dest)
-            Files.move(tmpFile, dest)
-            None
           }
         }
       }
     }
-  }
 
-  private def fetchCleanDSName(id: String):String = {
-    DB.withConnection { implicit c =>
+    private def makeMetadataFile(destDir: Path, dsid: String, eids: Option[Map[String, Seq[String]]]) = {
+      val mdf = MetadataFilter.INSTANCE
+      val mdPath    = destDir.resolve("metadata.csv")
+      val mdTmpFile = Files.createTempFile(tmpDir, "metadata", ".csv")
+      val mdWriter = new FileWriter(mdTmpFile.toFile)
+      val descLine: ListBuffer[String] = new ListBuffer()
+      val headLine: ListBuffer[String] = new ListBuffer()
+      mdf.getExportMetadata().foreach { col =>
+        descLine += (mdf.getDescriptions().apply(col))
+        headLine += (col)
+      }
+      mdWriter.write("\""+(descLine.mkString("\",\""))+"\"\n")
+      mdWriter.write("\""+(headLine.mkString("\",\""))+"\"\n")
+      DB.withTransaction { implicit c =>
+        val query = eids match {
+          case None => SQL("SELECT * FROM ace_metadata WHERE dsid={dsid}").on('dsid -> dsid)
+          case Some(ids) => SQL("SELECT * FROM ace_metadata WHERE dsid={dsid} AND "+AnormHelper.dynUnionBuilder(ids))
+              .on((ids+("dsid" -> Seq(dsid))).map(AnormHelper.dynQueryToNamedParam(_)).toSeq:_*)
+        }
+        query.apply().foreach {
+          line => {
+            val dataLine: ListBuffer[String] = new ListBuffer()
+            // Now do something with each row of data.
+            mdf.getExportMetadata().foreach { col =>
+              col.toUpperCase match {
+                case "PDATE"|"HDATE" => {
+                  val d: String = line[Option[Date]](col) match {
+                    case Some(dt) => AnormHelper.df2.format(dt)
+                    case None => ""
+                  }
+                  dataLine += (d)
+                }
+                case _ => dataLine += (line[Option[String]](col)).getOrElse("")
+              }
+            }
+            mdWriter.write("\""+(dataLine.mkString("\",\""))+"\"\n")
+          }
+        }
+      }
+      mdWriter.close
+      Files.move(mdTmpFile, mdPath)
+    }
+
+    private def fetchCleanDSName(id: String):String = {
+      DB.withConnection { implicit c =>
+        try {
+          SQL("SELECT title FROM ace_datasets WHERE dsid = {dsid}").on("dsid"->id).as(scalar[Option[String]].single).getOrElse(id)
+        } catch {
+          case _ : Throwable => { id }
+        }
+      }
+    }
+
+    private def withZipFilesystem(zipFile: Path, overwrite: Boolean = true)(f: FileSystem => Unit) {
+      if (overwrite) Files deleteIfExists zipFile
+      val env = Map("create" -> "true").asJava
+      val uri = new URI("jar", zipFile.toUri().toString(), null)
+
+      val system = FileSystems.newFileSystem(uri, env)
       try {
-        SQL("SELECT title FROM ace_datasets WHERE dsid = {dsid}").on("dsid"->id).as(scalar[Option[String]].single).getOrElse(id)
-      } catch {
-        case _ : Throwable => { id }
+        f(system)
+      } finally {
+        system.close()
       }
     }
   }
-
-  private def withZipFilesystem(zipFile: Path, overwrite: Boolean = true)(f: FileSystem => Unit) {
-    if (overwrite) Files deleteIfExists zipFile
-    val env = Map("create" -> "true").asJava
-  val uri = new URI("jar", zipFile.toUri().toString(), null)
-
-  val system = FileSystems.newFileSystem(uri, env)
-  try {
-    f(system)
-    } finally {
-      system.close()
-    }
-  }
-}
