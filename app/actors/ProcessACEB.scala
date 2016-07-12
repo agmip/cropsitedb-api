@@ -74,8 +74,8 @@ class ProcessACEB extends Actor {
   private def extractAndPost(experiments: List[AceExperiment], metadata: List[String], dsid: String) = {
     val extracted = experiments.map(ex => {
       val observed = Json.toJson(extractObservedVars(ex)).toString
-      val obsEndSeasonCount = ex.getOberservedData().keySet().size.toString
-      val obsTimeseriesCount = ex.getOberservedData().getTimeseries().size.toString
+      val obsEndSeasonCount = ex.getObservedData().keySet().size.toString
+      val obsTimeseriesCount = ex.getObservedData().getTimeseries().size.toString
       extractMetadata(ex, metadata, List(("api_source", "AgMIP"),
         ("dsid", dsid), ("fl_geohash", ex.getValueOr("~fl_geohash~", "")),
         ("obs_end_of_season", obsEndSeasonCount), ("obs_time_series_data", obsTimeseriesCount),
@@ -93,7 +93,7 @@ class ProcessACEB extends Actor {
     def daily(o: AceObservedData): List[String] = {
       o.getTimeseries().map { ts => ts.keySet() }.toList.flatten
     }
-    (experiment.getOberservedData().keySet().toList ::: daily(experiment.getOberservedData())).distinct
+    (experiment.getObservedData().keySet().toList ::: daily(experiment.getObservedData())).distinct
   }
 
   @scala.annotation.tailrec
