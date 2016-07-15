@@ -1,6 +1,6 @@
 package cropsitedb.actors
 
-import akka.actor.{Actor, Props}
+import akka.actor.{Actor, Props, ActorLogging}
 import akka.event.Logging
 
 import play.api.db.DB
@@ -22,7 +22,7 @@ import scala.collection.JavaConversions._
 
 import play.api.Play.current
 
-class ProcessACEB extends Actor {
+class ProcessACEB extends Actor with ActorLogging {
   def receive = {
     case msg: Messages.ProcessFile =>
       processing(msg)
@@ -73,7 +73,7 @@ class ProcessACEB extends Actor {
 
   private def extractAndPost(experiments: List[AceExperiment], metadata: List[String], dsid: String) = {
     val extracted = experiments.map(ex => {
-      val observed = Json.toJson(extractObservedVars(ex)).toString
+      val observed = extractObservedVars(ex).mkString(" ")
       val obsEndSeasonCount = ex.getObservedData().keySet().size.toString
       val obsTimeseriesCount = ex.getObservedData().getTimeseries().size.toString
       extractMetadata(ex, metadata, List(("api_source", "AgMIP"),
@@ -98,16 +98,36 @@ class ProcessACEB extends Actor {
 
   @scala.annotation.tailrec
   private def extractMetadata(experiment: AceExperiment, metadata: List[String], collected: List[Tuple2[String,String]]):List[Tuple2[String,String]] = {
-    val md = metadata.headOption
-    if(md.isDefined) {
-      val mdx = Option(AceFunctions.deepGetValue(experiment, md.get))
-      if (mdx.isDefined) {
-        extractMetadata(experiment, metadata.tail, Tuple2(md.get, if (md.get == "crid") mdx.get.toUpperCase else mdx.get) :: collected)
-      } else {
-        extractMetadata(experiment, metadata.tail, collected)
+    metadata.headOption match {
+      case None => collected
+      case Some(lookup) => {
+        val found = lookup match {
+          case "fertilizer" => {
+            log.info("YAYAYAYAYAYAYAYAYAYAYAYA")
+            Option(AceFunctions.deepGetValue(experiment, "fecd")) match {
+              case None => Some("N")
+              case Some(_) => Some("Y")
+            }
+          }
+          case "irrig" => {
+            Option(AceFunctions.deepGetValue(experiment, "irop")) match {
+              case None => Some("N")
+              case Some(_) => Some("Y")
+            }
+          }
+          case l => Option(AceFunctions.deepGetValue(experiment, l))
+        }
+        found match {
+          case None => extractMetadata(experiment, metadata.tail, collected)
+          case Some(value) => {
+            val collect = Tuple2(lookup, lookup match {
+              case "crid" => value.toUpperCase
+              case _ => value
+            })
+            extractMetadata(experiment, metadata.tail, collect :: collected)
+          }
+        }
       }
-    } else {
-      collected
     }
   }
 }
