@@ -73,7 +73,7 @@ class ProcessACEB extends Actor with ActorLogging {
 
   private def extractAndPost(experiments: List[AceExperiment], metadata: List[String], dsid: String) = {
     val extracted = experiments.map(ex => {
-      val observed = Json.toJson(extractObservedVars(ex)).toString
+      val observed = extractObservedVars(ex).mkString(" ")
       val obsEndSeasonCount = ex.getObservedData().keySet().size.toString
       val obsTimeseriesCount = ex.getObservedData().getTimeseries().size.toString
       extractMetadata(ex, metadata, List(("api_source", "AgMIP"),
