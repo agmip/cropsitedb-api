@@ -103,7 +103,6 @@ class ProcessACEB extends Actor with ActorLogging {
       case Some(lookup) => {
         val found = lookup match {
           case "fertilizer" => {
-            log.info("YAYAYAYAYAYAYAYAYAYAYAYA")
             Option(AceFunctions.deepGetValue(experiment, "fecd")) match {
               case None => Some("N")
               case Some(_) => Some("Y")
