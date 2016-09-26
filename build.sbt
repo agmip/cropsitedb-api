@@ -15,10 +15,10 @@ libraryDependencies ++= Seq(
   ws,
   "org.postgresql"   % "postgresql"          % "9.3-1102-jdbc41",
   "org.mariadb.jdbc" % "mariadb-java-client" % "1.1.8",
-  "org.agmip.ace"    % "ace-core"            % "2.0.1-SNAPSHOT",
+  "org.agmip.ace"    % "ace-core"            % "2.1.0-SNAPSHOT",
   "org.apache.tika"  % "tika-core"           % "1.6",
-  "org.agmip"        % "dome"                % "1.4.9",
-  "org.agmip"        % "acmo"                % "1.1.4",
+  "org.agmip"        % "dome"                % "1.4.12",
+  "org.agmip"        % "acmo"                % "1.1.8",
   "org.agmip.tools"  %% "data-seam"           % "0.1.0-SNAPSHOT"
 )
 

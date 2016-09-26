@@ -77,9 +77,10 @@ object DownloadController extends Controller {
               val acmoWriter = new FileWriter(tmpFile.toFile)
               acmoWriter.write(AcmoUtil.generateAcmoHeader)
               DB.withTransaction { implicit c =>
+                val variables = AcmoUtil.generateAcmoHeader.split("\n").last.drop(2).toLowerCase.replace("#", "NUM")
                 val acmos = eids match {
-                  case None => SQL("SELECT * FROM acmo_metadata WHERE dataset_id={dsid}").on('dsid -> dataset.dsid)
-                  case Some(ids) => SQL("SELECT * FROM acmo_metadata WHERE dataset_id={dsid} AND "+AnormHelper.dynUnionBuilder(ids)).on((ids+("dsid" -> Seq(dataset.dsid))).map(AnormHelper.dynQueryToNamedParam(_)).toSeq:_*)
+                  case None => SQL("SELECT {v} FROM acmo_metadata WHERE dataset_id={dsid}").on('v -> variables, 'dsid -> dataset.dsid)
+                  case Some(ids) => SQL("SELECT {v} FROM acmo_metadata WHERE dataset_id={dsid} AND "+AnormHelper.dynUnionBuilder(ids)).on((ids+("v" -> Seq(variables), "dsid" -> Seq(dataset.dsid))).map(AnormHelper.dynQueryToNamedParam(_)).toSeq:_*)
                 }
                 acmos.apply()
               }
