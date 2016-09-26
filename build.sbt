@@ -1,6 +1,6 @@
 name := "cropsitedb-api"
 
-version := "2.0.8-SNAPSHOT"
+version := "2.0.8"
 
 lazy val root = (project in file(".")).enablePlugins(PlayScala)
 
