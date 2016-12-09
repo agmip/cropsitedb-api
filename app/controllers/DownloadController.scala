@@ -50,7 +50,6 @@ object DownloadController extends Controller {
       dlReq => {
         val dlReqId  = java.util.UUID.randomUUID.toString
         val fileTypes = fileTypeBuilder(dlReq.fileTypes)
-        Logger.debug(""+fileTypes)
         val dlPath = Paths.get(baseDir, "downloads",  dlReqId+".zip")
         Files.createDirectories(dlPath)
         withZipFilesystem(dlPath) { dl =>
@@ -63,9 +62,8 @@ object DownloadController extends Controller {
             if (fileTypes.contains("ACEB")) {
               Logger.debug("RUNNING ACE DOWNLOAD PROCESSING")
               //ACEB Processing
-              val acebPath   = destPath.resolve("ace.aceb")
-              val sourcePath = Paths.get(baseDir, "uploads", dataset.dsid, "ace.aceb")
-              Logger.debug("Source Path: "+sourcePath)
+              val acebPath   = destPath.resolve("ACE_dataset.aceb")
+              val sourcePath = Paths.get(baseDir, "uploads", dataset.dsid, "ACE_dataset.aceb")
               buildACEB(sourcePath, acebPath, tmpDir.resolve(dlReqId), dataset)
             }
             if (fileTypes.contains("ACMO")) {
@@ -115,7 +113,6 @@ object DownloadController extends Controller {
               )
             }
             case false => {
-              Logger.debug("Creating dataset root: "+destFile.getParent)
               Files.createDirectories(destFile.getParent)
               withZipFilesystem(destFile) { ds =>
                 val destPath = ds.getPath(fetchCleanDSName(dsid))
@@ -123,13 +120,11 @@ object DownloadController extends Controller {
                   def visitFileFailed(file: Path, ex: IOException) = FileVisitResult.CONTINUE
                   def visitFile(file: Path, attrs: BasicFileAttributes) = {
                     val destDir = destPath.resolve(sourceDir.relativize(file.getParent).toString)
-                    Logger.debug("REsolved: "+destDir.resolve(file.getFileName.toString))
                     Files.copy(file, destDir.resolve(file.getFileName.toString))
                     FileVisitResult.CONTINUE
                   }
                   def preVisitDirectory(dir: Path, attrs: BasicFileAttributes) = {
                     val relPath =  sourceDir.relativize(dir)
-                    Logger.debug("Creation relative path: "+relPath.toString)
                     Files.createDirectories(destPath.resolve(relPath.toString))
                     FileVisitResult.CONTINUE
                   }
@@ -178,23 +173,22 @@ object DownloadController extends Controller {
     }
 
     private def buildACEB(source: Path, dest: Path, tmp: Path, data: DownloadHelper.DSIDRequest):Option[String] = {
-      Logger.debug("Received source: "+source+" dest: "+dest+" tmp: "+tmp)
-      Logger.debug("Received data: "+data)
       Files.isReadable(source) match {
-        case false => Some("Missing the source file: "+source)
+        case false => { Some("Missing the source file: "+source) }
         case true  => {
           Files.exists(dest) match {
             case true  => Some("Download file conflict. Please try again")
             case false => {
-              Files.createDirectories(dest.getParent)
+              val issues: Path = Files.createDirectories(dest.getParent)
               Files.createDirectories(tmp)
               var sids:Set[String] = Set()
               var wids:Set[String] = Set()
               val destDS = new AceDataset()
               val sourceDS = AceParser.parseACEB(source.toAbsolutePath.toFile)
+              data.eids.foreach(println)
               sourceDS.getExperiments.toList.foreach { ex =>
                 val eid = ex.getId(false)
-                if (data.eids.contains(eid)) {
+                if (data.eids.getOrElse(List()).contains(eid)) {
                   destDS.addExperiment(ex.rebuildComponent())
                   sids = sids + ex.getValueOr("sid", "INVALID")
                   wids = wids + ex.getValueOr("wid", "INVALID")
@@ -219,9 +213,7 @@ object DownloadController extends Controller {
                 }
               }
               val tmpFile = Files.createTempFile(tmp, data.dsid, ".tmp").toAbsolutePath
-              Logger.debug("ACE TMP File: "+tmpFile)
               AceGenerator.generateACEB(tmpFile.toFile, destDS)
-              Logger.debug("ACE Dest: "+dest)
               Files.move(tmpFile, dest)
               None
             }
