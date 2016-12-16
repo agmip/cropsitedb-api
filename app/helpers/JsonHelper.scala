@@ -36,7 +36,7 @@ object JsonHelper {
         val nv:Option[JsValue] = v match {
           case Some(d1:Date) if nk.endsWith("date") => Some(JsString(AnormHelper.df.format(d1)))
           case Some(d2:Date) if nk.endsWith("dat")  => Some(JsString(AnormHelper.df.format(d2)))
-          case Some(s:String) if (nk == "obs_vars") => Some(Json.parse(s))
+          case Some(s:String) if (nk == "obs_vars") => Some(JsArray(s.split(" ").map(z => JsString(z))))
           case Some(s:String) => Some(JsString(s))
           case None     => None
           case _        => None
